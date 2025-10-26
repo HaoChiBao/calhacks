@@ -29,7 +29,8 @@ type Hotel = {
   providerLink?: string;
 };
 
-const API_BASE = 'http://localhost:8080';
+// const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.VITE_API_BASE;
 
 function fmtYMD(d: Date): string {
   // YYYY-MM-DD

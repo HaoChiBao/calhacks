@@ -371,7 +371,8 @@ const Content: React.FC<ContentProps> = ({
               : activity.title;
 
           try {
-            const res = await fetch('http://localhost:8080/api/places/search', {
+            // const res = await fetch('http://localhost:8080/api/places/search', {
+            const res = await fetch(import.meta.env.VITE_API_BASE + '/api/places/search', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

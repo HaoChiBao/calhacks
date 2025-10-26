@@ -387,7 +387,11 @@ const Chat: React.FC<ChatProps> = ({
       setLoading(true);
 
       console.log('[chat] fetch /api/chat/stream ->', payload);
-      const res = await fetch('http://localhost:8080/api/chat/stream', {
+      // const res = await fetch('http://localhost:8080/api/chat/stream', {
+
+      // use api env variable
+      const res = await fetch(import.meta.env.VITE_API_BASE + '/api/chat/stream', {
+    
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -626,7 +630,7 @@ const Chat: React.FC<ChatProps> = ({
         )}
 
         {/* JSON blocks per day (updates per activity) */}
-        <div className="history">
+        {/* <div className="history">
           {planDays.map((day, dIdx) => (
             <div key={dIdx} className="bubble assistant">
               <p>
@@ -647,7 +651,7 @@ const Chat: React.FC<ChatProps> = ({
               </ul>
             </div>
           ))}
-        </div>
+        </div> */}
 
         <div className="info-bar">
           <div className="info">

@@ -72,7 +72,7 @@ function App() {
       />
 
       <button
-        className="toggle-btn"
+        className="toggle-content-btn"
         onClick={() => setHideContent((v) => !v)}
         style={{ position: 'fixed', right: 16, bottom: 16 }}
       >
