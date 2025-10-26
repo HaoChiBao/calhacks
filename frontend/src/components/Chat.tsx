@@ -626,7 +626,7 @@ const Chat: React.FC<ChatProps> = ({
         )}
 
         {/* JSON blocks per day (updates per activity) */}
-        {/* <div className="history">
+        <div className="history">
           {planDays.map((day, dIdx) => (
             <div key={dIdx} className="bubble assistant">
               <p>
@@ -647,7 +647,7 @@ const Chat: React.FC<ChatProps> = ({
               </ul>
             </div>
           ))}
-        </div> */}
+        </div>
 
         <div className="info-bar">
           <div className="info">
