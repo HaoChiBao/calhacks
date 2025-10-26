@@ -1,0 +1,40 @@
+.location-block{
+    background-color: white;
+    border: 1px solid #ececec;
+    border-radius: 10px;
+    padding: 10px;
+    
+    position: relative;
+    display: flex;
+    /* align-items: center; */
+    gap: 10px;
+    
+    width: 300px;
+    height: 100px;
+}
+
+.location-block img{
+    height: 100%;
+    aspect-ratio: 1/1;
+    border-radius: 10px;
+}
+
+.location-block h3{
+    
+}
+
+.location-block p{
+    color: #666666;
+}
+
+.location-block .drag-indicator{
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+
+    height: 40px;
+    width: 2px;
+    border-radius: 2px;
+    background-color: #adadad;
+}

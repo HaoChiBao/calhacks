@@ -1,0 +1,18 @@
+.background-asset{
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+
+    overflow: hidden;
+    position: absolute;
+    z-index: -1;
+}
+
+.background-asset img{
+    position: absolute;
+    width: 100%;
+    bottom: -100px;
+}
