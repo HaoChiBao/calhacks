@@ -1,10 +1,12 @@
-// server.ts
+// src/server.ts
 import dotenv from "dotenv";
 import express from "express";
-import cors, { type CorsOptions } from "cors";
+import cors from "cors";
 
-import { example } from "./routers/route-example";
-import { chat } from "./routers/chat";
+import { example } from "./routers/route-example.js";
+import { chat } from "./routers/chat.js";
+import { places } from "./routers/places.js";
+import { hotels } from "./routers/hotels.js";
 
 dotenv.config();
 
@@ -12,7 +14,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 
 const app = express();
 
-const corsOptions: CorsOptions = {
+const corsOptions = {
   origin: [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -25,11 +27,12 @@ const corsOptions: CorsOptions = {
 };
 
 app.use(cors(corsOptions));
-
 app.use(express.json({ limit: "100mb" }));
 
 // routes
 app.use("/api/chat", chat);
+app.use("/api/places", places);
+app.use("/api/hotels", hotels);
 app.use("/example", example);
 
 app.get("/", (_req, res) => {
@@ -37,5 +40,5 @@ app.get("/", (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`); 
+  console.log(`Server listening on port ${PORT}`);
 });

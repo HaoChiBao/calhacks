@@ -1,11 +1,11 @@
 // routers/chat.ts
+
 import express, { type RequestHandler } from "express";
 import dotenv from "dotenv";
 import OpenAI from "openai";
 import { randomUUID } from "node:crypto";
 
-// dotenv.config();
-dotenv.config({ path: ".env.local" }); // load from .env.local first
+dotenv.config({ path: ".env.local" }); // load local env if present
 
 export interface ChatRequestBody {
   message: string;
@@ -14,34 +14,41 @@ export interface ChatRequestBody {
   radiusMeters?: number;
   preferences?: Record<string, unknown>;
 }
+
+/** Optional raw POI suggestion type returned by the model */
 export interface Suggestion {
   name: string; category: string; why: string;
   address?: string; distanceMeters?: number; estSpend?: string; hours?: string;
   website?: string; mapHint?: string; tags?: string[]; [k: string]: unknown;
 }
-export interface PlanItem { title: string; short_desc: string; est_cost?: string }
-export type PlanDays = PlanItem[][];
 
-export interface ChatResponse {
-  replyText: string;
-  suggestions: Suggestion[];
-  note?: string;
-  plan?: Array<{ title: string; short_desc: string; est_cost?: string }>; // legacy, single flat plan
-  planDays?: PlanDays; // NEW: index = day-1, each has 3–7 items
+/** STRICT item shape required in planDays */
+export interface StrictPlanItem {
+  title: string;
+  short_description: string;
+  estimated_cost?: string; // must be "free", "$N", or "$N–$M"
 }
 
+/** planDays: array-of-arrays; each inner array is ONE FULL DAY of activities */
+export type StrictPlanDays = StrictPlanItem[][];
+
+export interface ChatResponseStrict {
+  replyText: string;
+  suggestions: Suggestion[];
+  planDays: StrictPlanDays;
+  note?: string;
+}
+
+// -------------------------------------------------------------------
 const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// ------------------------------------
-// Speed knobs / model choices
-// ------------------------------------
-const FAST_MODEL = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini"; // low TTFT / fast streaming
-const JSON_MODEL = process.env.OPENAI_JSON_MODEL || FAST_MODEL;    // use same fast model by default
+const JSON_MODEL = process.env.OPENAI_JSON_MODEL || "gpt-4o-mini";
+const PLACES_API_KEY = process.env.PLACES_API_KEY || "";
 
 // ---------- Logging helpers ----------
 const MAX_LOG_LEN = 1200;
-const DELTA_LOG_EVERY = Number(process.env.DELTA_LOG_EVERY || 12); // throttle delta logs
+const DELTA_LOG_EVERY = Number(process.env.DELTA_LOG_EVERY || 12);
 
 function truncate(v: unknown, max = MAX_LOG_LEN) {
   return typeof v === "string" && v.length > max
@@ -63,19 +70,75 @@ function log(rid: string, stage: string, info: Record<string, any>) {
   console.log(`[chat] ${stage}`, payload);
 }
 
-// ---------- JSON schema (extended to include planDays) ----------
-const planItemSchema = {
+// ---------- Cost normalization (strict formats only) ----------
+/**
+ * Normalize any input string to one of:
+ *   - "free"
+ *   - "$N"           (integer)
+ *   - "$N–$M"        (integer range, en dash)
+ * If it can't be normalized, return undefined (omit from JSON).
+ */
+function coerceCost(input?: string | null): string | undefined {
+  if (!input) return undefined;
+  const raw = String(input).trim().toLowerCase();
+
+  // 1) Free keywords
+  if (/\bfree\b/.test(raw) || /\$0\b/.test(raw)) return "free";
+
+  // Normalize separators like "~", "to", "-", "–" to a single hyphen for parsing
+  const sepNormalized = raw
+    .replace(/[–—]/g, "-")
+    .replace(/\bto\b/g, "-")
+    .replace(/~|\s+/g, " ")
+    .trim();
+
+  // Pull out all integers (ignore decimals)
+  const nums = (sepNormalized.match(/\d{1,6}/g) || []).map(n => parseInt(n, 10)).filter(n => Number.isFinite(n));
+
+  if (nums.length === 1) {
+    const n = Math.max(0, nums[0] | 0);
+    return `$${n}`;
+  }
+
+  if (nums.length >= 2) {
+    let [a, b] = nums;
+    if (a > b) [a, b] = [b, a];
+    if (a === b) return `$${a}`;
+    return `$${a}–$${b}`;
+  }
+
+  // "$$", "$$$" style — rough mapping
+  if (/^\${2}$/.test(raw)) return "$10–$25";
+  if (/^\${3}$/.test(raw)) return "$25–$50";
+  if (/^\${4,}$/.test(raw)) return "$50–$100";
+
+  return undefined;
+}
+
+// ---------- STRICT JSON schema (3–5 activities / day) ----------
+const strictPlanItemSchema = {
   type: "object",
   properties: {
     title: { type: "string" },
-    short_desc: { type: "string" },
-    est_cost: { type: "string" }
+    short_description: { type: "string" },
+    /**
+     * Must be either "free", "$N", or "$N–$M".
+     */
+    estimated_cost: { type: "string" }
   },
-  required: ["title", "short_desc"],
-  additionalProperties: true
+  required: ["title", "short_description"],
+  additionalProperties: false
 } as const;
 
-const schema = {
+/**
+ * planDays:
+ * - array of days
+ * - each day is an array of **3–5** activities
+ * - each activity strictly: { title, short_description, estimated_cost? }
+ * - activities within a day must be mutually feasible in one day
+ *   (clustered by distance, ordered morning→evening, reasonable durations)
+ */
+const strictSchema = {
   type: "object",
   properties: {
     replyText: { type: "string" },
@@ -99,62 +162,303 @@ const schema = {
         additionalProperties: true
       }
     },
-    // NEW: planDays — array (days) of arrays (3–7 items each)
     planDays: {
+      description:
+        "Array of days; each inner array is a single day's plan with **3–5** activities that are mutually feasible within that day (clustered, walkable/short transit, ordered morning→evening).",
       type: "array",
       items: {
         type: "array",
-        items: planItemSchema,
+        items: strictPlanItemSchema,
         minItems: 3,
-        maxItems: 7
+        maxItems: 5
       }
     }
   },
-  required: ["replyText", "suggestions"],
+  required: ["replyText", "suggestions", "planDays"],
   additionalProperties: false
 } as const;
 
-// ---------- Core helpers ----------
-// Short system prompt for faster TTFT; instruct minimal reasoning in text.
-const system = [
-  "You are a hyper-local trip concierge.",
-  "Provide concrete nearby suggestions and short micro-itineraries.",
-  "Keep internal reasoning minimal; do not explain your steps.",
-  "Prefer walkable clusters and logical sequencing; minimize backtracking.",
-  "Stay within the requested radius when possible.",
-  "Use coords as the origin for rough distance estimates."
-].join(" ");
-
-function toPlan(suggestions: Suggestion[]): PlanItem[] {
-  return suggestions.map(s => ({
-    title: s.name,
-    short_desc: s.why || s.category || "",
-    est_cost: s.estSpend
-  }));
-}
-
-// Build **planDays** with 3–7 items per day, filling every day
-function toPlanDays(suggestions: Suggestion[], nights?: number): PlanDays {
+// ---------- Helpers to enforce strict shape ----------
+function suggestionsToStrictDays(
+  suggestions: Suggestion[],
+  nights?: number
+): StrictPlanDays {
   const days = Math.max(1, nights ?? 1);
-  const base: PlanItem[] = toPlan(suggestions);
+  const items: StrictPlanItem[] = suggestions.map((s) => {
+    const normalized = coerceCost(s.estSpend);
+    return {
+      title: s.name,
+      short_description: s.why || s.category || "",
+      ...(normalized ? { estimated_cost: normalized } : {}),
+    };
+  });
 
-  // Target items per day between 3 and 7
-  let perDay = Math.ceil(base.length / days);
-  perDay = Math.min(7, Math.max(3, perDay));
-
+  let perDay = Math.ceil(items.length / days);
+  perDay = Math.min(5, Math.max(3, perDay));
   const needed = days * perDay;
 
-  // If we don't have enough, repeat cyclically (acceptable for scaffolding)
-  const pool: PlanItem[] = [];
-  for (let i = 0; i < needed; i++) {
-    pool.push(base[i % Math.max(1, base.length)]);
-  }
+  const pool: StrictPlanItem[] = [];
+  const denom = Math.max(1, items.length);
+  for (let i = 0; i < needed; i++) pool.push(items[i % denom]);
 
-  // Distribute sequentially into day buckets
-  const out: PlanDays = [];
+  const out: StrictPlanDays = [];
   for (let d = 0; d < days; d++) {
     const start = d * perDay;
     out.push(pool.slice(start, start + perDay));
+  }
+
+  return out;
+}
+
+function normalizeStrictDays(input: unknown): StrictPlanDays | null {
+  if (!Array.isArray(input)) return null;
+  const out: StrictPlanDays = [];
+  for (const day of input) {
+    if (!Array.isArray(day)) return null;
+    if (day.length < 3 || day.length > 5) return null;
+    const strictDay: StrictPlanItem[] = [];
+    for (const it of day) {
+      const title = (it as any)?.title;
+      const shortDesc =
+        (it as any)?.short_description ??
+        (it as any)?.short_desc;
+      const estRaw =
+        (it as any)?.estimated_cost ??
+        (it as any)?.est_cost ??
+        (it as any)?.estSpend;
+      if (typeof title !== "string" || typeof shortDesc !== "string") return null;
+      const normalized = coerceCost(typeof estRaw === "string" ? estRaw : undefined);
+      const one: StrictPlanItem = {
+        title,
+        short_description: shortDesc,
+        ...(normalized ? { estimated_cost: normalized } : {}),
+      };
+      strictDay.push(one);
+    }
+    out.push(strictDay);
+  }
+  return out;
+}
+
+// ---------- Google Places helpers (Text Search) ----------
+type PlaceHit = {
+  place_id: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+async function textSearch(
+  query: string,
+  center?: { lat: number; lng: number },
+  radiusMeters?: number,
+  maxResults = 4
+): Promise<PlaceHit[]> {
+  if (!PLACES_API_KEY) return [];
+  const params = new URLSearchParams({
+    query,
+    key: PLACES_API_KEY,
+  });
+  if (center && radiusMeters) {
+    params.set("location", `${center.lat},${center.lng}`);
+    params.set("radius", String(Math.max(200, Math.min(radiusMeters, 50000))));
+  }
+  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?${params.toString()}`;
+  const resp = await fetch(url);
+  if (!resp.ok) return [];
+  const data = await resp.json().catch(() => null) as any;
+  if (!data?.results) return [];
+  const out: PlaceHit[] = [];
+  for (const r of data.results.slice(0, maxResults)) {
+    if (!r.place_id || !r.geometry?.location) continue;
+    out.push({
+      place_id: r.place_id,
+      name: r.name || query,
+      lat: r.geometry.location.lat,
+      lng: r.geometry.location.lng,
+    });
+  }
+  return out;
+}
+
+// A very light category guess to widen alternates when a duplicate is detected
+function guessCategoryKeywords(title: string, shortDesc?: string) {
+  const s = `${title} ${shortDesc ?? ""}`.toLowerCase();
+  if (/\b(museum|gallery|exhibit)\b/.test(s)) return "museum";
+  if (/\b(park|garden|zoo|aquarium)\b/.test(s)) return "park";
+  if (/\b(shrine|temple|church|cathedral)\b/.test(s)) return "shrine";
+  if (/\b(market|shopping|mall|boutique)\b/.test(s)) return "shopping";
+  if (/\b(lookout|tower|observatory|view)\b/.test(s)) return "view";
+  if (/\b(nightlife|bar|club|izakaya|pub)\b/.test(s)) return "bar";
+  if (/\b(cafe|coffee|tea)\b/.test(s)) return "cafe";
+  return "tourist attraction";
+}
+
+// De-duplicate planDays using Places Text Search; maintain 3–5 activities/day
+async function dedupeAndEnrichPlanDays(
+  planDays: StrictPlanDays,
+  center?: { lat: number; lng: number },
+  radiusMeters?: number
+): Promise<StrictPlanDays> {
+  if (!Array.isArray(planDays) || planDays.length === 0) return planDays;
+
+  // Track global uniqueness by place_id and normalized name
+  const seenPlaceIds = new Set<string>();
+  const seenNames = new Set<string>(); // lowercase, trimmed
+
+  const out: StrictPlanDays = [];
+
+  for (let d = 0; d < planDays.length; d++) {
+    const day = planDays[d] ?? [];
+    const unique: StrictPlanItem[] = [];
+
+    // First pass: try to map each activity to a canonical place_id
+    for (const act of day) {
+      const q = act.title;
+      let hits: PlaceHit[] = [];
+      try {
+        hits = await textSearch(q, center, radiusMeters, 4);
+        // If 0 hits, try a light category search near center
+        if (hits.length === 0) {
+          const cat = guessCategoryKeywords(act.title, act.short_description);
+          hits = await textSearch(cat, center, radiusMeters, 4);
+        }
+      } catch {
+        // ignore
+      }
+
+      // Pick first unused hit
+      let chosen: PlaceHit | null = null;
+      for (const h of hits) {
+        const nameKey = h.name?.toLowerCase().trim();
+        if (h.place_id && !seenPlaceIds.has(h.place_id) && nameKey && !seenNames.has(nameKey)) {
+          chosen = h; break;
+        }
+      }
+
+      if (chosen) {
+        seenPlaceIds.add(chosen.place_id);
+        if (chosen.name) seenNames.add(chosen.name.toLowerCase().trim());
+        // Use the canonical name as title (prevents subtle dupes like “Shibuya Crossing” vs “Shibuya Scramble”)
+        unique.push({
+          title: chosen.name || act.title,
+          short_description: act.short_description,
+          ...(act.estimated_cost ? { estimated_cost: act.estimated_cost } : {}),
+        });
+      } else {
+        // No hit or all hit duplicates — try to at least de-dupe by text name
+        const nameKey = act.title.toLowerCase().trim();
+        if (!seenNames.has(nameKey)) {
+          seenNames.add(nameKey);
+          unique.push(act);
+        }
+        // else drop it; we’ll fill below to keep 3–5 items
+      }
+    }
+
+    // Ensure 3–5 items per day; if we lost items to de-dupe, fill alternates
+    const needMin = 3;
+    const needMax = 5;
+    const want = Math.min(needMax, Math.max(needMin, unique.length));
+    while (unique.length < want) {
+      // Pull a general alternate nearby (tourist attraction)
+      let altHits: PlaceHit[] = [];
+      try {
+        altHits = await textSearch("tourist attraction", center, radiusMeters, 6);
+      } catch { /* ignore */ }
+
+      let chosen: PlaceHit | null = null;
+      for (const h of altHits) {
+        const nameKey = h.name?.toLowerCase().trim();
+        if (h.place_id && !seenPlaceIds.has(h.place_id) && nameKey && !seenNames.has(nameKey)) {
+          chosen = h; break;
+        }
+      }
+      if (!chosen) break; // cannot fill more
+
+      seenPlaceIds.add(chosen.place_id);
+      if (chosen.name) seenNames.add(chosen.name.toLowerCase().trim());
+      unique.push({
+        title: chosen.name,
+        short_description: "Notable nearby attraction.",
+        // do not invent a cost; leave undefined if we don’t know
+      });
+    }
+
+    // If we somehow ended > 5 because original day had many unique, trim to 5
+    out.push(unique.slice(0, needMax));
+  }
+
+  return out;
+}
+
+// ---------- Title normalization + de-dupe helpers ----------
+function normalizeTitleKey(t: string) {
+  return t
+    .toLowerCase()
+    .replace(/^[\s]*(visit|explore|walk|tour|see|go to|discover)\s+/g, "") // drop generic prefixes
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9\s]/g, "") // remove punctuation
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function dedupeWithinDayByTitle(day: StrictPlanItem[]): StrictPlanItem[] {
+  const seen = new Set<string>();
+  const out: StrictPlanItem[] = [];
+  for (const item of day) {
+    const key = normalizeTitleKey(item.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+// ---------- FINAL CLAMP: Guarantee 3–5 items per day + de-dupe ----------
+/**
+ * Ensures every day has 3–5 items, removes *within-day* duplicates by normalized title,
+ * and truncates anything over 5 automatically. If <3 after de-dup, we fill from suggestions.
+ */
+function enforceDayCount3to5(
+  planDays: StrictPlanDays,
+  suggestions: Suggestion[],
+  nights?: number
+): StrictPlanDays {
+  const daysCount = Math.max(planDays.length, 1);
+  const fallback = suggestionsToStrictDays(suggestions || [], nights ?? daysCount);
+
+  const out: StrictPlanDays = [];
+  for (let i = 0; i < daysCount; i++) {
+    // 1) de-dupe by title within the day
+    let day = dedupeWithinDayByTitle(planDays[i] || []);
+
+    // 2) hard truncate anything over 5 RIGHT AWAY (automatic truncation)
+    day = day.slice(0, 5);
+
+    const titles = new Set(day.map(a => normalizeTitleKey(a.title)));
+
+    // 3) ensure min 3 by pulling distinct fillers
+    const needMin = 3;
+    if (day.length < needMin) {
+      const tryPools: StrictPlanItem[][] = [];
+      if (fallback[i]) tryPools.push(fallback[i]);
+      if (fallback.length) tryPools.push(fallback.flat());
+
+      for (const pool of tryPools) {
+        for (const cand of pool) {
+          const key = normalizeTitleKey(cand.title);
+          if (!titles.has(key)) {
+            day.push(cand);
+            titles.add(key);
+            if (day.length >= needMin) break;
+          }
+        }
+        if (day.length >= needMin) break;
+      }
+    }
+
+    // 4) final truncate to 5 (in case we overfilled to reach 3–5)
+    out.push(day.slice(0, 5));
   }
   return out;
 }
@@ -167,8 +471,9 @@ function sseHeaders(res: express.Response) {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 }
-function sseEvent(res: express.Response, event: string, data: any) {
-  const payload = typeof data === "string" ? data : JSON.stringify(data);
+function sseEvent(res: express.Response, event: string, data: unknown) {
+  const payload =
+    typeof data === "string" || Buffer.isBuffer(data) ? (data as any) : JSON.stringify(data);
   res.write(`event: ${event}\n`);
   res.write(`data: ${payload}\n\n`);
 }
@@ -178,11 +483,41 @@ function sseClose(res: express.Response) {
 }
 
 // ====================================================================
-// Non-stream JSON endpoint (debug/tools)
+// PROMPT BUILDERS (anti-duplicate + max 5 hard rule in instructions)
+// ====================================================================
+const SYSTEM_RULES = [
+  "You MUST answer in STRICT JSON only. No preface, no explanations.",
+  "Return exactly these keys: replyText (string), suggestions (array), planDays (array of arrays).",
+  "planDays details:",
+  "- Each inner array is ONE DAY's plan, ordered morning→evening.",
+  "- Include **3–5** activities per day (NEVER more than 5). If you draft >5 candidates, PICK THE BEST 5 and STOP.",
+  "- Absolutely NO duplicate or near-duplicate titles in the same day (e.g., 'Balboa Park' vs 'Visit Balboa Park' counts as a duplicate; keep only one).",
+  "- Avoid repeating essentially the same venue under different names (e.g., 'Gaslamp Quarter Exploration' and 'Gaslamp Quarter'). Keep the most informative phrasing once.",
+  "- Activities in the same day must be mutually feasible: clustered (walkable/short transit, <= ~2–3km apart unless transit is obvious), reasonable durations (~60–120m typical), consider opening hours if relevant.",
+  "- Each activity strictly has fields: { title, short_description, estimated_cost? }.",
+  "- IMPORTANT: estimated_cost must be ONLY one of: 'free', '$N' (integer), or '$N–$M' (integer range with an en dash). No other formats.",
+  "- DO NOT include day labels like 'Day 1' outside the JSON. JSON ONLY."
+].join(" ");
+
+function userPrompt(minimalPayload: any) {
+  return [
+    "Return STRICT JSON with keys: replyText, suggestions, and planDays (strict).",
+    "Each day must contain **3–5** activities feasible within the same day (clustered, ordered morning→evening, reasonable duration).",
+    "Within a day, DO NOT include duplicate or near-duplicate titles. If two names refer to the same place, keep only ONE.",
+    "Each activity object must be exactly { title, short_description, (optional) estimated_cost }.",
+    "For estimated_cost use ONLY: 'free', '$N', or '$N–$M' (en dash).",
+    "Use 'nights' (default 1) to set the number of days.",
+    "Never output more than FIVE items for any day; if you have more than five, select the top five and STOP.",
+    "Input:\n" + JSON.stringify(minimalPayload)
+  ].join(" ");
+}
+
+// ====================================================================
+// Non-stream JSON endpoint (strict JSON)
 // ====================================================================
 const postChat: RequestHandler<
   Record<string, never>,
-  ChatResponse | { error: string; note?: string },
+  ChatResponseStrict | { error: string; note?: string },
   ChatRequestBody
 > = async (req, res) => {
   const rid = randomUUID();
@@ -195,13 +530,7 @@ const postChat: RequestHandler<
 
   try {
     const { message, destination, coords, radiusMeters = 2000, preferences = {} } = req.body ?? {};
-    log(rid, "input_parsed", {
-      message, destination, coords: safeStringify(coords),
-      radiusMeters, preferences: truncate(safeStringify(preferences))
-    });
-
     if (!message || (!destination && !coords)) {
-      log(rid, "input_validation_failed", { reason: "missing message or destination/coords" });
       res.status(400).json({ error: "Provide 'message' and either 'destination' or 'coords'." });
       return;
     }
@@ -210,9 +539,7 @@ const postChat: RequestHandler<
       typeof (preferences as any)?.duration?.nights === "number"
         ? (preferences as any).duration.nights
         : undefined;
-    log(rid, "nights_computed", { nights });
 
-    // Minified payload → faster TTFT
     const minimalPayload = {
       message,
       destination: destination ?? null,
@@ -222,61 +549,42 @@ const postChat: RequestHandler<
       nights: nights ?? null,
       nowIso: new Date().toISOString(),
     };
-    log(rid, "openai_build_payload", { minimalPayload: truncate(safeStringify(minimalPayload)) });
 
-    const tCall = nowMs();
     const completion = await openai.chat.completions.create({
       model: JSON_MODEL,
-      temperature: 0.5,
-      max_tokens: 800,
-      presence_penalty: 0,
-      frequency_penalty: 0,
+      temperature: 0.4,
+      max_tokens: 1400,
       messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content:
-            "Return STRICT JSON with keys: replyText, suggestions, and planDays (array where each index is a day, each with 3-7 activities). " +
-            "Every day must be filled with 3-7 concrete activities/places to visit. " +
-            "Input:\n" + JSON.stringify(minimalPayload)
-        }
+        { role: "system", content: SYSTEM_RULES },
+        { role: "user", content: userPrompt(minimalPayload) }
       ],
       response_format: {
         type: "json_schema",
-        json_schema: { name: "ChatRecSchema", schema }
+        json_schema: { name: "StrictPlanSchema", schema: strictSchema }
       } as any
     });
-    const tCallEnd = nowMs();
-    const content = completion.choices?.[0]?.message?.content || "{}";
-    log(rid, "openai_response", {
-      ms: tCallEnd - tCall,
-      content_len: content.length,
-      preview: truncate(content, 300)
-    });
 
-    try {
-      const parsed = JSON.parse(content) as ChatResponse;
-      const planDays = parsed.planDays && parsed.planDays.length
-        ? parsed.planDays
-        : toPlanDays(parsed.suggestions || [], nights);
-      const out: ChatResponse = { ...parsed, planDays };
-      log(rid, "response_parsed", {
-        suggestions_count: parsed.suggestions?.length ?? 0,
-        days: planDays.length,
-        first_day_items: planDays[0]?.length ?? 0
-      });
-      res.status(200).json(out);
-    } catch (e: any) {
-      log(rid, "response_parse_failed", { error: e?.message, fallback_text_len: content.length });
-      res.status(200).json({
-        replyText: content,
-        suggestions: [],
-        planDays: [[]],
-        note: "Model did not return valid JSON; delivered raw text."
-      } as any);
+    const content = completion.choices?.[0]?.message?.content || "{}";
+    let parsed = JSON.parse(content) as ChatResponseStrict;
+
+    // Normalize strict planDays or fallback from suggestions
+    let planDays = parsed.planDays ? normalizeStrictDays(parsed.planDays) : null;
+    if (!planDays || planDays.length === 0) {
+      planDays = suggestionsToStrictDays(parsed.suggestions || [], nights);
     }
+
+    // De-duplicate/enrich via Google Places around the intended stay area
+    const center = coords ?? undefined;
+    if (PLACES_API_KEY) {
+      planDays = await dedupeAndEnrichPlanDays(planDays, center, radiusMeters);
+    }
+
+    // FINAL: remove within-day duplicates, and AUTOMATICALLY TRUNCATE to max 5, ensure min 3
+    planDays = enforceDayCount3to5(planDays, parsed.suggestions || [], nights);
+
+    parsed = { ...parsed, planDays };
+    res.status(200).json(parsed);
   } catch (e: any) {
-    log(rid, "server_error", { error: e?.message, stack: e?.stack && truncate(String(e.stack), 1500) });
     res.status(500).json({ error: e?.message || "server error" });
   } finally {
     log(rid, "request_complete", { ms: nowMs() - t0 });
@@ -284,7 +592,8 @@ const postChat: RequestHandler<
 };
 
 // ====================================================================
-// Streaming endpoint — faster start, JSON stream; emits planDays
+// Streaming endpoint — STRICT JSON only (jsonDelta + jsonFinal)
+// Streams replyText inside the JSON so the UI can show live chat text.
 // ====================================================================
 const postChatStream: RequestHandler<
   Record<string, never>,
@@ -301,13 +610,7 @@ const postChatStream: RequestHandler<
 
   try {
     const { message, destination, coords, radiusMeters = 2000, preferences = {} } = req.body ?? {};
-    log(rid, "input_parsed", {
-      message, destination, coords: safeStringify(coords),
-      radiusMeters, preferences: truncate(safeStringify(preferences))
-    });
-
     if (!message || (!destination && !coords)) {
-      log(rid, "input_validation_failed", { reason: "missing message or destination/coords" });
       res.status(400).json({ error: "Provide 'message' and either 'destination' or 'coords'." });
       return;
     }
@@ -316,18 +619,12 @@ const postChatStream: RequestHandler<
       typeof (preferences as any)?.duration?.nights === "number"
         ? (preferences as any).duration.nights
         : undefined;
-    log(rid, "nights_computed", { nights });
 
     sseHeaders(res);
-    log(rid, "sse_headers_sent", {});
-
-    // Immediate heartbeat + keepalive
-    sseEvent(res, "open", { ok: true });
     const ping = setInterval(() => sseEvent(res, "ping", { t: Date.now() }), 15000);
     res.on("close", () => clearInterval(ping));
     res.on("finish", () => clearInterval(ping));
 
-    // Minified payload for the **first** (NL) call
     const minimalPayload = {
       message,
       destination: destination ?? null,
@@ -337,73 +634,21 @@ const postChatStream: RequestHandler<
       nights: nights ?? null,
       nowIso: new Date().toISOString(),
     };
-    log(rid, "openai_build_payload_min", { minimalPayload: truncate(safeStringify(minimalPayload)) });
 
-    // Optional prefill so users see something instantly
-    sseEvent(res, "replyDelta", "Thinking through nearby options…\n");
-
-    // 1) Stream NL reply (FAST model; concise output; capped tokens)
-    const tStreamCall = nowMs();
-    const stream = await openai.chat.completions.create({
-      model: FAST_MODEL,
-      stream: true,
-      temperature: 0.5,
-      max_tokens: 650,
-      presence_penalty: 0,
-      frequency_penalty: 0,
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content:
-            "Write a concise, vivid plan of things to do nearby. Keep reasoning minimal; do not explain steps. " +
-            "Do NOT output JSON here—just natural language. Input:\n" + JSON.stringify(minimalPayload)
-        }
-      ]
-    });
-    log(rid, "openai_stream_started", { ms_to_start: nowMs() - tStreamCall });
-
-    let replyText = "";
-    let chunks = 0;
-    for await (const chunk of stream) {
-      const delta = chunk?.choices?.[0]?.delta?.content ?? "";
-      if (!delta) continue;
-      replyText += delta;
-      chunks++;
-      if (chunks % DELTA_LOG_EVERY === 0) {
-        log(rid, "stream_delta", { chunk_index: chunks, delta_len: delta.length, total_len: replyText.length });
-      }
-      sseEvent(res, "replyDelta", delta); // client preserves whitespace
-    }
-    log(rid, "openai_stream_complete", { chunks, total_len: replyText.length });
-    sseEvent(res, "replyDone", { length: replyText.length });
-
-    // 2) Structured suggestions + planDays (STREAMED JSON tokens)
-    const tSuggest = nowMs();
     const jsonStream = await openai.chat.completions.create({
       model: JSON_MODEL,
       stream: true,
       temperature: 0.4,
-      max_tokens: 1000,
-      presence_penalty: 0,
-      frequency_penalty: 0,
+      max_tokens: 1600,
       messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content:
-            "Return STRICT JSON with keys: replyText, suggestions, and planDays. " +
-            "planDays must be an array where each index corresponds to a day of the trip; each day MUST have 3-7 activities (objects with title, short_desc, optional est_cost). " +
-            "Use the nights value to determine number of days (default 1 if missing). " +
-            "Input:\n" + JSON.stringify({ ...minimalPayload, draftedReply: replyText })
-        }
+        { role: "system", content: SYSTEM_RULES },
+        { role: "user", content: userPrompt(minimalPayload) }
       ],
       response_format: {
         type: "json_schema",
-        json_schema: { name: "ChatRecSchema", schema }
+        json_schema: { name: "StrictPlanSchema", schema: strictSchema }
       } as any
     });
-    log(rid, "openai_json_stream_started", { ms_to_start: nowMs() - tSuggest });
 
     let jsonBuf = "";
     let jsonChunks = 0;
@@ -413,45 +658,37 @@ const postChatStream: RequestHandler<
       jsonBuf += delta;
       jsonChunks++;
       if (jsonChunks % DELTA_LOG_EVERY === 0) {
-        log(rid, "json_stream_delta", { jsonChunks, delta_len: delta.length, total_len: jsonBuf.length });
+        log(rid, "json_stream_delta", { jsonChunks, total_len: jsonBuf.length });
       }
       sseEvent(res, "jsonDelta", delta);
     }
-    log(rid, "openai_json_stream_complete", { jsonChunks, total_len: jsonBuf.length });
 
     try {
-      const parsed = JSON.parse(jsonBuf) as ChatResponse;
-      const planDays = parsed.planDays && parsed.planDays.length
-        ? parsed.planDays
-        : toPlanDays(parsed.suggestions || [], nights);
+      let parsed = JSON.parse(jsonBuf) as ChatResponseStrict;
 
-      // Back-compat events (old clients)
-      sseEvent(res, "suggestions", parsed.suggestions ?? []);
-      sseEvent(res, "finalReply", parsed.replyText ?? replyText);
+      // Normalize costs/shape
+      let planDays = parsed.planDays ? normalizeStrictDays(parsed.planDays) : null;
+      if (!planDays || planDays.length === 0) {
+        planDays = suggestionsToStrictDays(parsed.suggestions || [], nights);
+      }
 
-      // NEW: emit planDays (day-indexed)
-      sseEvent(res, "planDays", planDays);
+      // De-duplicate/enrich via Google Places around intended area
+      const center = coords ?? undefined;
+      if (PLACES_API_KEY) {
+        planDays = await dedupeAndEnrichPlanDays(planDays, center, radiusMeters);
+      }
 
-      // Final parsed JSON snapshot
-      sseEvent(res, "jsonFinal", { ...parsed, planDays });
+      // FINAL: remove within-day duplicates, and AUTOMATICALLY TRUNCATE to max 5, ensure min 3
+      planDays = enforceDayCount3to5(planDays, parsed.suggestions || [], nights);
 
-      log(rid, "json_stream_parsed", {
-        suggestions_count: parsed.suggestions?.length ?? 0,
-        days: planDays.length,
-        first_day_items: planDays[0]?.length ?? 0
-      });
-    } catch (e: any) {
-      log(rid, "json_stream_parse_failed", { error: e?.message, preview: truncate(jsonBuf, 300) });
-      sseEvent(res, "suggestions", []);
-      sseEvent(res, "planDays", [[]]); // emit empty day for shape
-      sseEvent(res, "finalReply", replyText);
-      sseEvent(res, "note", "Model did not return valid JSON for suggestions/planDays; sent fallback.");
+      parsed = { ...parsed, planDays };
+      sseEvent(res, "jsonFinal", parsed);
+    } catch {
+      sseEvent(res, "error", "Invalid JSON returned by the model.");
     }
 
     sseClose(res);
-    log(rid, "sse_connection_closed", {});
   } catch (e: any) {
-    log(rid, "server_error", { error: e?.message, stack: e?.stack && truncate(String(e.stack), 1500) });
     try { sseEvent(res, "error", e?.message || "server error"); } catch {}
     sseClose(res);
   } finally {
@@ -460,7 +697,7 @@ const postChatStream: RequestHandler<
 };
 
 // ---------- Routes ----------
-router.post("/", postChat);             // non-stream JSON
-router.post("/stream", postChatStream); // SSE stream
+router.post("/", postChat);
+router.post("/stream", postChatStream);
 
 export const chat = router;

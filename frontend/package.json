@@ -12,6 +12,7 @@
   "dependencies": {
     "@googlemaps/js-api-loader": "^2.0.1",
     "@react-google-maps/api": "^2.20.7",
+    "livekit-client": "^2.15.13",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.4"

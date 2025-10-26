@@ -1,5 +1,5 @@
 .background-asset{
-    width: 100vw;
+    width: 100%;
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -11,7 +11,14 @@
     z-index: -1;
 }
 
-.background-asset img{
+.background-asset #img-0{
+    position: absolute;
+    width: 100%;
+    top: -200px;
+    transform: rotate(180deg);
+}
+
+.background-asset #img-1{
     position: absolute;
     width: 100%;
     bottom: -100px;

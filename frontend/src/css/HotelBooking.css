@@ -1,0 +1,284 @@
+/* ========= Overlay / visibility ========= */
+
+.hotel-booking.hidden {
+  width: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.hotel-booking {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  width: 100%;
+height: 100%;
+
+  /* subtle glassy overlay like content-hub vibe */
+  backdrop-filter: blur(4px);
+  background: rgba(255, 255, 255, 0.35);
+
+  z-index: 100000;
+  padding: 10px;
+}
+
+/* ========= Modal ========= */
+
+.hotel-booking .modal {
+  position: relative;
+  width: 520px;
+  max-width: 92vw;
+  max-height: 82vh;
+
+  background-color: #fff;
+  border-radius: 10px;
+  border: 1px solid #ececec;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  /* smooth pop like other panels */
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transform: translateY(0);
+  overflow: hidden;
+}
+
+.hotel-booking .modal:focus-within {
+  box-shadow: 0 6px 12px rgba(0,0,0,0.12);
+}
+
+/* ========= Header ========= */
+
+.hb-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 10px;
+  border-bottom: 1px solid #ececec;
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.hb-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #222;
+}
+
+.hb-close {
+  border: 1px solid #ececec;
+  background-color: #fff;
+  cursor: pointer;
+  border-radius: 20px;
+
+  width: 30px;
+  height: 30px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  line-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hb-close:hover {
+  background-color: #f5f5f5;
+}
+
+/* ========= Controls (top section) ========= */
+
+.hb-controls {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+
+  padding: 10px;
+  padding-top: 8px;
+}
+
+.hb-destination,
+.hb-dates,
+.hb-guests {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  border: 1px solid #ececec;
+  background-color: #fff;
+  border-radius: 10px;
+  padding: 8px 10px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.hb-destination label,
+.hb-dates label,
+.hb-guests label {
+  font-size: 12px;
+  color: #666;
+  min-width: 72px;
+}
+
+.hb-destination input,
+.hb-dates input,
+.hb-guests input {
+  border: none;
+  outline: none;
+  font-size: 14px;
+  width: 100%;
+  background: transparent;
+  color: #222;
+}
+
+.hb-dates span {
+  color: #999;
+  font-size: 12px;
+}
+
+.hb-test-btn {
+  border: 1px solid #ececec;
+  background-color: #fff;
+  cursor: pointer;
+  border-radius: 20px;
+  height: 34px;
+  padding: 0 14px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  font-size: 14px;
+
+  justify-self: start;
+}
+
+.hb-test-btn:hover {
+  background-color: #f5f5f5;
+}
+
+/* Make controls two columns on wider screens */
+@media (min-width: 560px) {
+  .hb-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+  .hb-destination {
+    grid-column: span 2;
+  }
+  .hb-test-btn {
+    grid-column: span 2;
+    justify-self: end;
+  }
+}
+
+/* ========= Error ========= */
+
+.hb-error {
+  margin: 0 10px;
+  border: 1px solid #ececec;
+  background: #fff8f8;
+  color: #b00020;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+}
+
+/* ========= Results list ========= */
+
+.hb-results {
+  padding: 10px;
+  padding-top: 0;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
+.hb-empty {
+  border: 1px solid #ececec;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Card look aligns with content-hub chips/panels */
+.hb-card {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 10px;
+
+  border: 1px solid #ececec;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 10px;
+
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.hb-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #ececec;
+}
+
+.hb-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hb-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hb-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #222;
+}
+
+.hb-sub {
+  font-size: 13px;
+  color: #666;
+}
+
+.hb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #444;
+}
+
+.hb-link {
+  margin-left: auto;
+  font-size: 13px;
+  text-decoration: none;
+  border: 1px solid #ececec;
+  border-radius: 20px;
+  padding: 4px 10px;
+  background: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+}
+
+.hb-link:hover {
+  background: #f5f5f5;
+}

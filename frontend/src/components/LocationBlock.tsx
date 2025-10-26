@@ -1,17 +1,51 @@
-import '../css/LocationBlock.css'
+// LOCATIONBLOCK.TSX
 
-const LocationBlock = () => {
-    return (
-        <div className='location-block'>
-            <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRNwO6mHJAzrUqPU8idTub9FvtiGCdRr3OSuQ&s" alt="" />
-            <div className="details">
-                <h3>Shibuya Crossing</h3>
-                <p>Tokyo, Japan</p>
-            </div>
+import "../css/LocationBlock.css";
+import React from "react";
 
-            <div className="drag-indicator"></div>
-        </div>
-    )
-}
+type Props = {
+  name: string;
+  description: string;
+  estimatedCost?: string;
+  imageUrl?: string;
+};
 
-export default LocationBlock
+const fallbackImg =
+  "https://maps.gstatic.com/tactile/pane/default_geocode-2x.png"; // neutral placeholder
+
+const LocationBlock: React.FC<Props> = ({
+  name,
+  description,
+  estimatedCost,
+  imageUrl,
+}) => {
+  const handleImgError: React.ReactEventHandler<HTMLImageElement> = (e) => {
+    const img = e.currentTarget;
+    if (img.src !== fallbackImg) {
+      // prevent recursion if fallback also fails
+      img.onerror = null;
+      img.src = fallbackImg;
+    }
+  };
+
+  return (
+    <div className="location-block">
+      <img
+        src={imageUrl || fallbackImg}
+        alt={name}
+        loading="lazy"
+        decoding="async"
+        onError={handleImgError}
+      />
+      <div className="details">
+        <h3 title={name}>{name}</h3>
+        <p>{description}</p>
+        {estimatedCost && <p className="sub">{estimatedCost}</p>}
+      </div>
+
+      <div className="drag-indicator"></div>
+    </div>
+  );
+};
+
+export default LocationBlock;
