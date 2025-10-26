@@ -5,11 +5,10 @@
   "type": "module",
   "description": "Trip planner server (Express + LiveKit token + Agents worker)",
   "license": "ISC",
-    "scripts": {
+  "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p src/tsconfig.json",
-    "start": "nodemon",
-
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
     "dev:agent": "tsx src/agents/dayPlanner.agent.ts start",
     "start:agent": "agents start src/agents/dayPlanner.agent.ts"
   },
@@ -28,6 +27,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",
     "@types/node": "^22.5.0",
     "ts-node": "^10.9.2",
