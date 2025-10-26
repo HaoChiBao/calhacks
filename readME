@@ -1,0 +1,108 @@
+# ✈️ Era — Imagine. Plan. Book.  
+### *The New Era of Travel.*
+
+---
+
+## 🌟 Inspiration  
+
+Era was born out of necessity — during exam season, our team scrambled to plan a last-minute trip to **CalHacks**. Between juggling coursework, booking flights, and finding hotels, we realized how **fragmented and chaotic** trip planning truly is.  
+
+We asked ourselves:  
+> *What if planning a trip could feel as easy as chatting with a friend?*  
+
+That question sparked **Era**, an all-in-one AI-powered travel assistant that helps you **imagine, plan, and book trips in minutes — not hours.**
+
+---
+
+## 💡 What It Does  
+
+Era is an **AI travel planner** that combines conversational intelligence with visual design.  
+Instead of switching between 5–8 different tools for flights, hotels, and itineraries, users simply **chat** with Era’s built-in travel agent to:  
+
+- 🌍 Generate **personalized itineraries** in seconds  
+- 🏨 Explore **real-time hotels and attractions**  
+- 🗺️ Visualize trips on an **interactive map interface**  
+
+Era’s **block-based visual UI** lets travelers drag, edit, and view their plans spatially — turning trip planning into a creative, intuitive experience.
+
+---
+
+## 🧱 How We Built It  
+
+**Frontend:**  
+- Built using **React**, **Vite**, **TypeScript**, **HTML**, and **CSS** for a modular, fast, and visually rich UI.  
+
+**Backend:**  
+- Powered by **Express.js** for routing, API handling, and managing async requests.  
+
+**Real-Time Data:**  
+- Integrated **SerpAPI** to fetch live information about hotels, restaurants, and attractions.  
+
+**AI Integration:**  
+- Leveraged the **OpenAI GPT-4 API** to generate personalized travel recommendations, itineraries, and contextual responses.  
+
+**Maps & Visualization:**  
+- Implemented **Google Maps API** to dynamically render routes, markers, and geospatial data.  
+
+**Deployment:**  
+- Hosted on **Vercel** for continuous deployment and seamless performance during hackathon iterations.  
+
+**Languages & Frameworks:**  
+- JavaScript, TypeScript, Node.js, Express, React  
+
+---
+
+## 🧩 Challenges We Faced  
+
+- **AI–Map Integration:** Converting GPT-generated itineraries into structured coordinates for map visualization.  
+- **Context Retention:** Maintaining conversational context to allow dynamic itinerary updates.  
+- **Time Pressure:** Building, debugging, and styling a full-stack AI system within 36 hours.  
+- **Team Coordination:** Managing multiple branches and merges under hackathon constraints.  
+
+---
+
+## 🏆 Accomplishments  
+
+- Built a fully functional **AI-powered travel planner** prototype in under 36 hours.  
+- Created an **interactive real-time map** where users can visualize their trips dynamically.  
+- Seamlessly integrated **GPT-4, Express.js, and Google Maps API** into one cohesive system.  
+- Transformed a personal pain point into a **scalable, human-centered product**.  
+
+---
+
+## 🧠 What We Learned  
+
+- Deepened our understanding of **prompt engineering** and **context-aware AI**.  
+- Improved **frontend-backend communication** for asynchronous and real-time data handling.  
+- Learned how **AI can enhance human creativity**, not replace it — bridging imagination and automation.  
+
+---
+
+## 🚀 What’s Next  
+
+- ✈️ Integrate **flight and hotel booking APIs** for real reservations  
+- 🧭 Use **preference learning** to personalize recommendations  
+- 📱 Build a **mobile version** for on-the-go travel planning  
+- 👥 Enable **group trip coordination**, budget optimization, and live updates  
+
+Our mission is simple:  
+> To make Era the **go-to AI travel companion** — where spontaneous ideas instantly become curated adventures.  
+
+---
+
+## 🧰 Built With  
+
+- `React`  
+- `TypeScript`  
+- `Vite`  
+- `Express.js`  
+- `Node.js`  
+- `HTML / CSS`  
+- `SerpAPI`  
+- `Google Maps API`  
+- `OpenAI GPT-4 API`  
+- `Vercel`  
+
+---
+
+### 🧑‍💻 Built with ❤️ at **CalHacks**
